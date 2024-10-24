@@ -1,0 +1,67 @@
+## quality control
+cat sample |while read id;
+do echo $id
+arr=($id) 
+fq1=${arr[1]} 
+fq2=${arr[2]}
+sample=${arr[0]}
+trim_galore -q 25 --phred33 --stringency 4 --length 25 -e 0.1  \
+  --paired $fq1  $fq2 \
+  --gzip -o clean_data
+done
+
+## alignment
+#!/bin/bash
+echo "开始时间：`date '+%Y%m%d %H-%M-%S'`"
+
+## index
+bowtie2_index=/data/wangchao/reference/hg38/hg38
+
+##samples
+cat sample| while  read id;
+do echo $id
+arr=($id)
+fq2=${arr[2]}
+fq1=${arr[1]}
+sample=${arr[0]}
+
+## alignment
+bowtie2  -p 30  --very-sensitive -X 2000 -x  $bowtie2_index -1 ${Path}$fq1 -2 ${Path}$fq2 |samtools sort  -O bam  -@ 5 -o - > ${sample}.raw.bam
+samtools index ${sample}.raw.bam
+bedtools bamtobed -i ${sample}.raw.bam  > ${sample}.raw.bed
+samtools flagstat ${sample}.raw.bam  > ${sample}.raw.stat
+
+## remove duplication
+sambamba markdup --overflow-list-size 500000  --tmpdir='./'  -r ${sample}.raw.bam  ${sample}.rmdup.bam
+samtools index   ${sample}.rmdup.bam
+
+## filtering
+samtools flagstat  ${sample}.rmdup.bam > ${sample}.rmdup.stat
+samtools view  -h  -f 2 -q 30    ${sample}.rmdup.bam   |grep -v chrM |samtools sort  -O bam  -@ 5 -o - > ${sample}.last.bam
+samtools index   ${sample}.last.bam
+samtools flagstat  ${sample}.last.bam > ${sample}.last.stat
+done
+echo "end: `date '+%Y%m%d %H-%M-%S'`"
+
+
+## cradle silencer identificantion
+###step_1
+cradle correctBias_stored -ctrlbw 293T-input5.last.bw -expbw output_a.bw output_b.bw output_c.bw \
+-r /data/wangchao/starr-seq/target/hg38.chrom.sizes.bed \
+-p 63 \
+-generateNormBW True \
+-biasType shear pcr map gquad \
+-covariDir /data/wangchao/starr-seq/covariate_files/hg38_fragLen300_kmer100 \
+-genome /data/wangchao/starr-seq/hg38.2bit \
+-o 20_293T_correctBias_bwresult \
+-bl /data/wangchao/starr-seq/hg38.blacklist.bed \
+-mi 20
+
+###step_2
+cradle callPeak -ctrlbw ${X}293T-input5_1.last_corrected.bw ${X}293T-input5_2.last_corrected.bw ${X}293T-input5_3.last_corrected.bw \
+-expbw ${X}output_a_corrected.bw ${X}output_b_corrected.bw ${X}output_c_corrected.bw -r ${Y}target/hg38.chrom.sizes.bed  \
+-rbin 300 \
+-wbin 100 \
+-d 20 \
+-fdr 0.05 \
+-o /data/wangchao/all_starr-seq/LAST/call-peak/empty/enviroment_peakCalling_result
